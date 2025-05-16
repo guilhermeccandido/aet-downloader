@@ -1,198 +1,178 @@
-require("dotenv").config();
-const axios = require("axios");
-const fs = require("fs").promises;
-const path = require("path");
+require('dotenv').config();
+const { chromium } = require('playwright');
+const fs = require('fs').promises;
+const path = require('path');
 
-const SIAET_ID = process.env.SIAET_ID;
-const SIAET_SECRET = process.env.SIAET_SECRET;
+const SIAET_ID_BASE64 = process.env.SIAET_ID_BASE64;
+const SIAET_SECRET_BASE64 = process.env.SIAET_SECRET_BASE64;
 const ANO_CONSULTA = process.env.ANO_CONSULTA;
+const MES_ESPECIFICO = process.env.MES_ESPECIFICO;
+const PLAYWRIGHT_NAVIGATION_TIMEOUT = parseInt(process.env.PLAYWRIGHT_NAVIGATION_TIMEOUT || '1200000', 10); // default 20 min
 
-const MAX_TENTATIVAS = 3;
-const BASE_DIR = "./aetsbaixadas";
+const BASE_DIR = './aetsbaixadas';
 
-
-async function obterToken(id, secret) {
-  if (!id || !secret) {
-    console.error("ID ou SECRET não fornecidos preencher no .env");
-    throw new Error("credenciais não fornecidas");
-  }
-  //const idBase64 = Buffer.from(id).toString("base64");
-  //const secretBase64 = Buffer.from(secret).toString("base64");
-  const idBase64 = id;
-  const secretBase64 = secret;
-
-  const url = `https://siaet.dnit.gov.br/api/token/?Id=${idBase64}&Secret=${secretBase64}`;
-
-  console.log("Solicitando token");
-  try {
-    const response = await axios.get(url);
-    if (
-      response.data &&
-      response.data.siaet &&
-      response.data.siaet.retorno === "token" &&
-      response.data.siaet.codigo === "200"
-    ) {
-      console.log("Token obtido");
-      return response.data.siaet.mensagem;
-    } else {
-      const erroMsg = response.data.siaet
-        ? `${response.data.siaet.codigo}: ${response.data.siaet.mensagem}`
-        : "resposta idenperada da api do token";
-      console.error("Erro ao obter token:", erroMsg);
-      throw new Error(`Falha ao obter token: ${erroMsg}`);
+async function obterToken(browser, idBase64, secretBase64) {
+    if (!idBase64 || !secretBase64) {
+        console.error('ID ou SECRET (Base64) não fornecidos. Verifique o arquivo .env');
+        throw new Error('Credenciais (Base64) não fornecidas');
     }
-  } catch (error) {
-    console.error("erro de requisição do token:", error.message);
-    if (error.response && error.response.data && error.response.data.siaet) {
-      console.error(
-        "detalhes do erro da api:",
-        error.response.data.siaet.mensagem,
-      );
-      throw new Error(`Falha na api: ${error.response.data.siaet.mensagem}`);
-    } else if (error.response) {
-      console.error("detalhes do erro da api:", error.response.data);
+
+    const tokenUrl = `https://siaet.dnit.gov.br/api/token/?Id=${idBase64}&Secret=${secretBase64}`;
+    console.log('Solicitando token:', tokenUrl);
+
+    const page = await browser.newPage();
+    try {
+        await page.goto(tokenUrl, { timeout: 60000 });
+        const content = await page.textContent('body');
+        const jsonData = JSON.parse(content);
+
+        if (jsonData && jsonData.siaet && jsonData.siaet.retorno === 'token' && jsonData.siaet.codigo === '200') {
+            const tokenValue = jsonData.siaet.mensagem;
+            console.log('Token obtido:', tokenValue);
+            return tokenValue;
+        } else {
+            const erroMsg = jsonData.siaet ? `${jsonData.siaet.codigo}: ${jsonData.siaet.mensagem}` : 'Resposta inesperada da API de token';
+            console.error('Erro ao obter token:', erroMsg);
+            throw new Error(`Falha ao obter token: ${erroMsg}`);
+        }
+    } catch (error) {
+        console.error('Erro na requisição do token:', error.message);
+        throw error;
+    } finally {
+        await page.close();
     }
-    throw error;
-  }
 }
 
-async function consultarAET(token, mes, ano) {
-  const mesFormatado = mes.toString().padStart(2, "0");
-  const url = `https://siaet.dnit.gov.br/api/aet/detalhe/v1/?token=${token}&mesLiberacaoAet=${mesFormatado}&anoLiberacaoAet=${ano}`;
-  console.log(`consultando aet para ${mesFormatado}/${ano}`);
+async function consultarAET(browser, token, mes, ano) {
+    const mesFormatado = mes.toString().padStart(2, '0');
+    const aetUrl = `https://siaet.dnit.gov.br/api/aet/detalhe/v1/?token=${encodeURIComponent(token)}&mesLiberacaoAet=${mesFormatado}&anoLiberacaoAet=${ano}`;
+    console.log(`Consultando AETs para ${mesFormatado}/${ano} (Timeout: ${PLAYWRIGHT_NAVIGATION_TIMEOUT / 1000}s):`, aetUrl);
 
-  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    const page = await browser.newPage();
     try {
-      const response = await axios.get(url);
-      if (
-        response.data &&
-        response.data.AET &&
-        Array.isArray(response.data.AET)
-      ) {
-        if (response.data.AET.length > 0) {
-          console.log(
-            `Dados AET (${response.data.AET.length} registros) recebidos com sucesso para ${mesFormatado}/${ano}.`,
-          );
-        } else {
-          console.log(`Nenhuma AET encontrada para ${mesFormatado}/${ano}.`);
-        }
-        return response.data; //retorna os dados mesmo coma aet vazia
-      } else if (
-        response.data &&
-        response.data.siaet &&
-        response.data.siaet.retorno === "erro"
-      ) {
-        console.warn(`Erro da API (${response.data.siaet.codigo}): ${response.data.siaet.mensagem}`);
+        page.setDefaultNavigationTimeout(PLAYWRIGHT_NAVIGATION_TIMEOUT);
+        page.setDefaultTimeout(PLAYWRIGHT_NAVIGATION_TIMEOUT);
 
-        if (
-          response.data.siaet.mensagem === "token invalido" ||
-          response.data.siaet.mensagem === "token expirado"
-        ) {
-          console.log("token invalido ou expirado.");
-          throw new Error("token invalido ou expirado");
+        await page.goto(aetUrl, { waitUntil: 'networkidle', timeout: PLAYWRIGHT_NAVIGATION_TIMEOUT });
+
+        let jsonText = await page.locator('body pre').textContent({ timeout: 5000 }).catch(() => null);
+        if (!jsonText) {
+            jsonText = await page.locator('body').textContent();
         }
-        if (
-          tentativa === MAX_TENTATIVAS ||
-          response.data.siaet.codigo === "400.005"
-        ) {
-          console.error(
-            "fala ao obter as aets, nao havera mais tentativas para esse mes",
-          );
-          return null;
+
+        if (!jsonText || jsonText.trim() === '') {
+            console.warn(`Nenhum conteúdo JSON encontrado na página para ${mesFormatado}/${ano}.`);
+            return null;
         }
-      } else {
-        console.warn("sem aets validas");
-      }
-      if (tentativa < MAX_TENTATIVAS) {
-        console.log("AGUARDE PARA TENTAR DE NOVO");
-      } else {
-        console.error("falha ao obter as aets não havera mais tentativas");
-        return null;
-      }
+
+        try {
+            const jsonData = JSON.parse(jsonText);
+            console.log(`Dados AET recebidos com sucesso para ${mesFormatado}/${ano}.`);
+            return jsonData;
+        } catch (parseError) {
+            console.error(`Erro ao fazer parse do JSON para ${mesFormatado}/${ano}:`, parseError.message);
+            console.error("Conteúdo recebido que falhou no parse:", jsonText.substring(0, 500) + "...");
+            return null;
+        }
+
     } catch (error) {
-      console.error("falha na tentativa de obter asaets:", error.message);
-      if (error.response) {
-      console.error("Status HTTP:", error.response.status);
-      console.error("Resposta da API:", error.response.data);
-      }
-;
-      if (error.message === "token invalido") {
-        throw error;
-      }
-      if (tentativa === MAX_TENTATIVAS) {
-        console.error("Erro final ao consultar aets");
+        console.error(`Erro ao consultar AETs para ${mesFormatado}/${ano}:`, error.message);
+        if (error.name === 'TimeoutError') {
+            console.error(`A consulta para ${mesFormatado}/${ano} excedeu o timeout de ${PLAYWRIGHT_NAVIGATION_TIMEOUT / 1000}s.`);
+        }
         return null;
-      }
-      console.log("aguardando 5 segundo para tentar novamente");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+    } finally {
+        await page.close();
     }
-  }
-  return null;
 }
 
 async function salvarDados(dados, ano, mes) {
-  const mesFormatado = mes.toString().padStart(2, "0");
-  const dirPath = path.join(BASE_DIR, ano.toString(), mesFormatado);
-  const filePath = path.join(dirPath, `aet_${ano}_${mesFormatado}.json`);
-  try {
-    await fs.mkdir(dirPath, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(dados, null, 2));
-    console.log(`Dados salvos em ${filePath}`);
-  } catch (error) {
-    console.error("Erro ao salvar o arquivo atual");
-  }
+    const mesFormatado = mes.toString().padStart(2, '0');
+    const dirPath = path.join(BASE_DIR, ano.toString(), mesFormatado);
+    const filePath = path.join(dirPath, `aet_${ano}_${mesFormatado}.json`);
+    try {
+        await fs.mkdir(dirPath, { recursive: true });
+        await fs.writeFile(filePath, JSON.stringify(dados, null, 2));
+        console.log(`Dados salvos em ${filePath}`);
+    } catch (error) {
+        console.error('Erro ao salvar o arquivo:', error.message);
+    }
 }
 
 async function main() {
-  console.log(`Iniciando processo de download das AETs`);
+    console.log(`Iniciando processo de download das AETs para o ano ${ANO_CONSULTA}.`);
+    console.log(`Timeout para navegação e consulta de AETs configurado para: ${PLAYWRIGHT_NAVIGATION_TIMEOUT / 1000} segundos.`);
 
-  if (!SIAET_ID || !SIAET_SECRET) {
-    console.error("SIAET_ID e SIAET_SECRET não foram fornecidos");
-    return;
-  }
+    if (!SIAET_ID_BASE64 || !SIAET_SECRET_BASE64) {
+        console.error('SIAET_ID_BASE64 e SIAET_SECRET_BASE64 não foram fornecidos no .env');
+        return;
+    }
+    if (!ANO_CONSULTA) {
+        console.error('ERRO CRÍTICO: A variável ANO_CONSULTA não está definida no arquivo .env.');
+        process.exit(1);
+    }
 
-  let token;
-  for (let mes = 1; mes <= 12; mes++) {
-    const mesFormatado = mes.toString().padStart(2, "0");
-    console.log(`\n---processando o mês ${mesFormatado}/${ANO_CONSULTA}---`);
+    const browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        ignoreHTTPSErrors: true
+    });
+
     try {
-      console.log("obtendo token do mes atual");
-      token = await obterToken(SIAET_ID, SIAET_SECRET);
-      if (!token) {
-        console.error(
-          `nao foi possivel obter token do mes ${mesFormatado}/${ANO_CONSULTA}. pulando esse mes`,
-        );
-        continue;
-      }
+        let mesesParaProcessar = [];
 
-      const dadosAET = await consultarAET(token, mes, ANO_CONSULTA);
+        if (MES_ESPECIFICO) {
+            const mesesSeparados = MES_ESPECIFICO.split(';')
+                .map(m => parseInt(m.trim()))
+                .filter(m => m >= 1 && m <= 12);
 
-      if (dadosAET) {
-        await salvarDados(dadosAET, ANO_CONSULTA, mes);
-      } else {
-        console.warn(
-          `nenhum dado de aet foi retornado ou houve falha persistente para ${mesFormatado}/${ANO_CONSULTA}.`,
-        );
-      }
-    } catch (error) {
-      if (error.message === "token invalido") {
-        console.warn(
-          `token explirou para o mes ${mesFormatado}/${ANO_CONSULTA}.`,
-        );
-        if (error.stack) {
-          console.error(error.stack);
+            if (mesesSeparados.length > 0) {
+                mesesParaProcessar = mesesSeparados;
+                console.log(`Processando meses específicos: ${mesesParaProcessar.join(', ')}/${ANO_CONSULTA}`);
+            } else {
+                console.warn('MES_ESPECIFICO fornecido está vazio ou inválido. Processando todos os meses.');
+                mesesParaProcessar = Array.from({ length: 12 }, (_, i) => i + 1);
+            }
+        } else {
+            console.log('Nenhum mês específico definido. Processando todos os meses de 1 a 12.');
+            mesesParaProcessar = Array.from({ length: 12 }, (_, i) => i + 1);
         }
-      }
-    }
 
-    console.log("2s para processar o proximo mes");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
+        for (const mes of mesesParaProcessar) {
+            const mesFormatado = mes.toString().padStart(2, '0');
+            console.log(`\n--- Processando o mês ${mesFormatado}/${ANO_CONSULTA} ---`);
+
+            // Novo token a cada mês
+            const token = await obterToken(context, SIAET_ID_BASE64, SIAET_SECRET_BASE64);
+            if (!token) {
+                console.error(`Falha ao obter token para o mês ${mesFormatado}/${ANO_CONSULTA}. Pulando...`);
+                continue;
+            }
+
+            const dadosAET = await consultarAET(context, token, mes, ANO_CONSULTA);
+
+            if (dadosAET) {
+                if (dadosAET.AET && Array.isArray(dadosAET.AET) && dadosAET.AET.length > 0) {
+                    await salvarDados(dadosAET, ANO_CONSULTA, mes);
+                } else if (dadosAET.siaet && dadosAET.siaet.retorno === 'erro') {
+                    console.warn(`API retornou erro para ${mesFormatado}/${ANO_CONSULTA}: ${dadosAET.siaet.codigo} - ${dadosAET.siaet.mensagem}. Nenhum arquivo será salvo.`);
+                } else {
+                    console.warn(`Nenhuma AET encontrada ou estrutura de dados inesperada para ${mesFormatado}/${ANO_CONSULTA}. Nenhum arquivo será salvo.`);
+                }
+            } else {
+                console.warn(`Nenhum dado de AET foi retornado para ${mesFormatado}/${ANO_CONSULTA}. Nenhum arquivo será salvo.`);
+            }
+
+            console.log('Aguardando 2 segundos antes de processar o próximo mês...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+    } catch (error) {
+        console.error('Erro principal no script:', error.message);
+    } finally {
+        await browser.close();
+        console.log('\nProcesso de download de AETs concluído.');
+    }
 }
-  main().catch((error) => {
-    console.error("erro no script", error.message);
-    if (error.stack) {
-      console.error(error.stack);
-    }
-  });
 
+main();
