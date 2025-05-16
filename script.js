@@ -7,7 +7,7 @@ const SIAET_ID_BASE64 = process.env.SIAET_ID_BASE64;
 const SIAET_SECRET_BASE64 = process.env.SIAET_SECRET_BASE64;
 const ANO_CONSULTA = process.env.ANO_CONSULTA;
 const MES_ESPECIFICO = process.env.MES_ESPECIFICO;
-const PLAYWRIGHT_NAVIGATION_TIMEOUT = parseInt(process.env.PLAYWRIGHT_NAVIGATION_TIMEOUT || '1200000', 10); // default 20 min
+const PLAYWRIGHT_NAVIGATION_TIMEOUT = parseInt(process.env.PLAYWRIGHT_NAVIGATION_TIMEOUT || '1200000', 10);
 
 const BASE_DIR = './aetsbaixadas';
 
@@ -142,7 +142,6 @@ async function main() {
             const mesFormatado = mes.toString().padStart(2, '0');
             console.log(`\n--- Processando o mês ${mesFormatado}/${ANO_CONSULTA} ---`);
 
-            // Novo token a cada mês
             const token = await obterToken(context, SIAET_ID_BASE64, SIAET_SECRET_BASE64);
             if (!token) {
                 console.error(`Falha ao obter token para o mês ${mesFormatado}/${ANO_CONSULTA}. Pulando...`);
