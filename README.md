@@ -8,3 +8,10 @@ Script para consumir API do SIAET e salvar AETs localmente
 - O download sera feito dentro do diretorio do script
 - O script ira criar toda a estrutura de ano/mes.
 
+Crie o arquivo .env
+
+SIAET_ID_BASE64= insira o id em base64
+SIAET_SECRET_BASE64= insira o secret em base64
+ANO_CONSULTA=2024 insira o ano
+#MES_ESPECIFICO= deixe comentado para baixar o ano todo, ou insira um mes especifico
+PLAYWRIGHT_NAVIGATION_TIMEOUT=1200000 (timeout de 20min para a api trabalhar)
