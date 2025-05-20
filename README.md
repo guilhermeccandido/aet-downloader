@@ -14,3 +14,5 @@ SIAET_ID_BASE64= insira o id em base64
 SIAET_SECRET_BASE64= insira o secret em base64
 ANO_CONSULTA=2024 insira o ano
 #MES_ESPECIFICO= deixe comentado para baixar o ano todo, ou insira um mes especifico
+
+*Na linha 194 selecione o horario que o script deve iniciar*
